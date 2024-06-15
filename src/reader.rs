@@ -1,6 +1,6 @@
     use std::collections::{vec_deque, VecDeque};
     use std::io::{BufReader, Bytes, Cursor, Read, Seek};
-    use std::str::from_utf8;
+    use std::str::{from_utf8, Utf8Error};
 
     // This struct is responsible for reading the data to be parsed as JSON
     // It also provides an iterator to iterate over the data character by character.
@@ -66,6 +66,52 @@
             JsonReader{
                 reader : BufReader::new(Cursor::new(bytes)),
                 character_buffer : VecDeque::with_capacity(4)
+            }
+        }
+    }
+
+    impl<T> Iterator for JsonReader<T>
+    where
+        T: Seek + Read
+    {
+        type Item = char;
+
+        #[allow(clippy::cast_possible_wrap)]
+        fn next(&mut self) -> Option<Self::Item> {
+
+            if !self.character_buffer.is_empty(){
+                return self.character_buffer.pop_front();
+            }
+
+            //Read the next 4 bytes from the buffer
+            let mut utf8_buffer = [0,0,0,0];
+            let _ = self.reader.read(&mut utf8_buffer);
+
+
+            //Try to parse the entire 4 bytes into a utf8 character
+            match from_utf8(&utf8_buffer){
+                Ok(string ) => {
+
+                    //Collect all the characters and assign them to the VecDeque data structure
+                    self.character_buffer = string.chars().collect();
+                    self.character_buffer.pop_front()
+                }
+                Err(error) => {
+                    // Read valid bytes, and rewind the buffered reader for
+                    //the remaining bytes, so that they can be read again during the next iteration
+                    let valid_bytes = error.valid_up_to();
+                    let valid_parsed_str = from_utf8(&utf8_buffer[..valid_bytes]).unwrap();
+
+                    let remaining_bytes = 4 - valid_bytes;
+                    //Now we have to rewind the iterator by N
+                    //Essentially we want to rewind the iterator to the valid-bytes+1
+                    self.reader.seek_relative(-(remaining_bytes as i64));
+
+                    self.character_buffer = valid_parsed_str.chars().collect();
+
+                    self.character_buffer.pop_front()
+
+                }
             }
         }
     }
